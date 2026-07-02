@@ -47,6 +47,16 @@ const badWords = [
  "dick"
 ];
 
+// ---------------- CLIENT (FIXED) ----------------
+const client = new Client({
+ authStrategy: new LocalAuth(),
+ puppeteer: {
+  headless: true,
+  executablePath: "/usr/bin/chromium",
+  args: ["--no-sandbox", "--disable-setuid-sandbox"]
+ }
+});
+
 // ---------------- ROLE SYSTEM ----------------
 function role(u) {
  if (u === OWNER_NUMBER) return "owner";
@@ -113,12 +123,12 @@ client.on("message_create", async (m) => {
 
    const count = addWarn(user, "vulgarizmus");
 
-   console.log(`🚫 ANTI-SWEAR | ${user} | warn ${count}`);
+   console.log(`🚫 ANTI-VULGAR | ${user} | warn ${count}`);
 
    if (count >= 3) {
     await chat.removeParticipants([user]);
-    console.log(`🚫 AUTO-KICK | ${user} (3 warns)`);
-    return chat.sendMessage("🚫 Kicked (vulgarizmus)");
+    console.log(`🚫 AUTO-KICK | ${user}`);
+    return chat.sendMessage("🚫 Kicked (3 warns)");
    }
 
    return chat.sendMessage("⚠️ Vulgarizmus nie je povolený!");
@@ -135,6 +145,7 @@ client.on("message_create", async (m) => {
    return m.reply(
 `📌 COMMANDS:
 !role
+!rolecheck
 !promote
 !demote
 !kick
@@ -142,7 +153,9 @@ client.on("message_create", async (m) => {
 !warn
 !warns
 !clearwarn
-!config`
+!config
+!setprefix
+!setmute`
    );
   }
 
