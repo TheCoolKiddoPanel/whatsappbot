@@ -1,89 +1,42 @@
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const fs = require("fs-extra");
+const express = require("express");
+const bodyParser = require("body-parser");
 
 fs.ensureDirSync("./data");
 
-// ---------------- FILES ----------------
-const files = {
- roles: "./data/roles.json",
- mute: "./data/mute.json",
- warnings: "./data/warnings.json"
+// ================= CONFIG =================
+const config = {
+ muteTime: 60000,
+ port: 3000
 };
 
-for (const f in files) {
- if (!fs.existsSync(files[f])) fs.writeJsonSync(files[f], {});
+// ================= DATA =================
+const muteFile = "./data/mute.json";
+
+let mute = fs.existsSync(muteFile)
+ ? fs.readJsonSync(muteFile)
+ : {};
+
+function saveMute() {
+ fs.writeJsonSync(muteFile, mute);
 }
 
-// ---------------- CONFIG ----------------
-const configPath = "./config.json";
-
-let config = fs.existsSync(configPath)
- ? fs.readJsonSync(configPath)
- : { prefix: "!", muteTime: 60000 };
-
-function saveConfig() {
- fs.writeJsonSync(configPath, config);
-}
-
-// ---------------- DATA ----------------
-let roles = fs.readJsonSync(files.roles);
-let mute = fs.readJsonSync(files.mute);
-let warnings = fs.readJsonSync(files.warnings);
-
-// ---------------- OWNER (IMPORTANT FIX) ----------------
-// používame iba číslo bez @c.us / @lid
-const OWNER_NUMBER = "421910210033";
-
-// ---------------- BAD WORDS ----------------
+// ================= BAD WORDS =================
 const badWords = [
  "fuck", "shit", "bitch",
  "kurva", "piča", "kokot",
  "debil", "idiot", "asshole", "dick"
 ];
 
-// ---------------- NORMALIZE ID ----------------
+// ================= NORMALIZE ID =================
 function normalizeId(id) {
  if (!id) return "";
  return id.toString().split("@")[0].split(":")[0];
 }
 
-// ---------------- ROLE SYSTEM ----------------
-function isOwner(user) {
- return normalizeId(user) === OWNER_NUMBER;
-}
-
-function role(user) {
- if (isOwner(user)) return "owner";
- return roles[normalizeId(user)] || "user";
-}
-
-function level(r) {
- return { user: 0, admin: 1, owner: 2 }[r] || 0;
-}
-
-function has(user, need) {
- return level(role(user)) >= level(need);
-}
-
-// ---------------- SAVE ----------------
-function save(file, data) {
- fs.writeJsonSync(file, data);
-}
-
-// ---------------- WARN SYSTEM ----------------
-function addWarn(user, reason) {
- const id = normalizeId(user);
-
- if (!warnings[id]) warnings[id] = [];
- warnings[id].push({ reason, time: Date.now() });
-
- save(files.warnings, warnings);
-
- return warnings[id].length;
-}
-
-// ---------------- CLIENT ----------------
+// ================= WHATSAPP CLIENT =================
 const client = new Client({
  authStrategy: new LocalAuth(),
  puppeteer: {
@@ -93,12 +46,90 @@ const client = new Client({
  }
 });
 
-// ---------------- START ----------------
+// ================= WEB APP =================
+const app = express();
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+
+// ---------------- HOME UI ----------------
+app.get("/", (req, res) => {
+ res.send(`
+ <h1>🤖 WhatsApp Bot Control Panel</h1>
+
+ <h2>📤 Send Message</h2>
+ <form method="POST" action="/send">
+  <input name="msg" placeholder="message" />
+  <button>Send</button>
+ </form>
+
+ <h2>🔇 Mute User</h2>
+ <form method="POST" action="/mute">
+  <input name="user" placeholder="421xxxxxxxx" />
+  <button>Mute</button>
+ </form>
+
+ <h2>🔊 Unmute User</h2>
+ <form method="POST" action="/unmute">
+  <input name="user" placeholder="421xxxxxxxx" />
+  <button>Unmute</button>
+ </form>
+
+ <h2>📋 Muted Users</h2>
+ <pre>${JSON.stringify(mute, null, 2)}</pre>
+ `);
+});
+
+// ---------------- SEND MESSAGE ----------------
+app.post("/send", async (req, res) => {
+ const { msg } = req.body;
+
+ const chats = await client.getChats();
+ const group = chats.find(c => c.isGroup);
+
+ if (group) {
+  group.sendMessage(msg);
+ }
+
+ console.log("📤 WEB MSG:", msg);
+ res.send("sent");
+});
+
+// ---------------- MUTE ----------------
+app.post("/mute", (req, res) => {
+ const user = normalizeId(req.body.user);
+
+ if (!user) return res.send("no user");
+
+ mute[user] = Date.now() + config.muteTime;
+ saveMute();
+
+ console.log("🔇 WEB MUTE:", user);
+
+ res.send("muted");
+});
+
+// ---------------- UNMUTE ----------------
+app.post("/unmute", (req, res) => {
+ const user = normalizeId(req.body.user);
+
+ delete mute[user];
+ saveMute();
+
+ console.log("🔊 WEB UNMUTE:", user);
+
+ res.send("unmuted");
+});
+
+// ================= WHATSAPP EVENTS =================
 client.on("qr", qr => qrcode.generate(qr, { small: true }));
 
 client.on("ready", () => {
  console.log("🤖 BOT ONLINE");
- console.log("🛠 OWNER:", OWNER_NUMBER);
+ console.log(`🌐 WEB UI: http://localhost:${config.port}`);
+
+ app.listen(config.port, () => {
+  console.log("🌐 Web UI running");
+ });
 });
 
 // ---------------- MESSAGE HANDLER ----------------
@@ -110,185 +141,26 @@ client.on("message_create", async (m) => {
   if (!chat.isGroup) return;
 
   const user = normalizeId(m.author || m.from);
-  const isOwn = m.fromMe;
+  const text = m.body.toLowerCase();
 
-  // ---------------- MUTE ----------------
+  // ================= MUTE =================
   if (mute[user] && Date.now() < mute[user]) {
-   if (!isOwn) await m.delete(true);
+   try { await m.delete(true); } catch {}
    return;
   }
 
-  // =====================================================
-  // 🚫 ANTI-VULGAR SYSTEM
-  // =====================================================
-  const text = m.body.toLowerCase();
+  // ================= ANTI-VULGAR =================
   const bad = badWords.some(w => text.includes(w));
 
   if (bad) {
    try { await m.delete(true); } catch {}
 
-   const count = addWarn(user, "vulgarizmus");
+   mute[user] = Date.now() + config.muteTime;
+   saveMute();
 
-   console.log(`🚫 BAD WORD | ${user} | warn ${count}`);
-
-   if (count >= 3) {
-    await chat.removeParticipants([m.author]);
-    console.log(`🚫 AUTO-KICK | ${user}`);
-    return chat.sendMessage("🚫 Kicked (vulgarizmus)");
-   }
+   console.log(`🚫 BAD WORD | ${user}`);
 
    return chat.sendMessage("⚠️ Vulgarizmus nie je povolený!");
-  }
-
-  // ---------------- PREFIX ----------------
-  if (!m.body.startsWith(config.prefix)) return;
-
-  const args = m.body.slice(config.prefix.length).trim().split(" ");
-  const cmd = args.shift().toLowerCase();
-
-  // ---------------- HELP ----------------
-  if (cmd === "help") {
-   return m.reply(
-`📌 COMMANDS:
-
-👤 INFO:
-!role
-
-🛡 ADMIN:
-!promote
-!demote
-!kick
-!mute
-
-⚠️ WARN:
-!warn
-!warns
-!clearwarn
-
-⚙️ CONFIG:
-!config
-!setprefix
-!setmute`
-   );
-  }
-
-  // ---------------- ROLE ----------------
-  if (cmd === "role") {
-   return m.reply("Role: " + role(user));
-  }
-
-  // ---------------- CONFIG ----------------
-  if (cmd === "config") {
-   return m.reply(`Prefix: ${config.prefix}\nMute: ${config.muteTime}`);
-  }
-
-  if (cmd === "setprefix") {
-   if (!isOwner(user)) return;
-   config.prefix = args[0];
-   saveConfig();
-   return m.reply("Prefix updated");
-  }
-
-  if (cmd === "setmute") {
-   if (!isOwner(user)) return;
-   config.muteTime = Number(args[0]);
-   saveConfig();
-   return m.reply("Mute updated");
-  }
-
-  // ---------------- PROMOTE ----------------
-  if (cmd === "promote") {
-   if (!has(user, "admin")) return;
-   const t = m.mentionedIds[0];
-   if (!t) return;
-
-   roles[normalizeId(t)] = "admin";
-   save(files.roles, roles);
-
-   await chat.promoteParticipants([t]);
-   return chat.sendMessage("⬆️ promoted");
-  }
-
-  // ---------------- DEMOTE ----------------
-  if (cmd === "demote") {
-   if (!has(user, "admin")) return;
-   const t = m.mentionedIds[0];
-   if (!t) return;
-
-   roles[normalizeId(t)] = "user";
-   save(files.roles, roles);
-
-   await chat.demoteParticipants([t]);
-   return chat.sendMessage("⬇️ demoted");
-  }
-
-  // ---------------- KICK ----------------
-  if (cmd === "kick") {
-   if (!has(user, "admin")) return;
-   const t = m.mentionedIds[0];
-   if (!t) return;
-
-   await chat.removeParticipants([t]);
-   return chat.sendMessage("👢 kicked");
-  }
-
-  // ---------------- MUTE ----------------
-  if (cmd === "mute") {
-   if (!has(user, "admin")) return;
-   const t = m.mentionedIds[0];
-   if (!t) return;
-
-   mute[normalizeId(t)] = Date.now() + config.muteTime;
-   save(files.mute, mute);
-
-   return chat.sendMessage("🔇 muted");
-  }
-
-  // ---------------- WARN ----------------
-  if (cmd === "warn") {
-   if (!has(user, "admin")) return;
-
-   const t = m.mentionedIds[0];
-   const reason = args.join(" ") || "no reason";
-
-   const id = normalizeId(t);
-
-   if (!warnings[id]) warnings[id] = [];
-
-   warnings[id].push({ reason, time: Date.now() });
-   save(files.warnings, warnings);
-
-   const count = warnings[id].length;
-
-   if (count >= 3) {
-    await chat.removeParticipants([t]);
-    return chat.sendMessage("🚫 KICKED (3 warns)");
-   }
-
-   return chat.sendMessage(`⚠️ Warn (${count}/3)`);
-  }
-
-  // ---------------- WARNS ----------------
-  if (cmd === "warns") {
-   const t = normalizeId(m.mentionedIds[0] || user);
-   const list = warnings[t] || [];
-
-   if (!list.length) return m.reply("No warns");
-
-   return m.reply(list.map((w,i)=>`${i+1}. ${w.reason}`).join("\n"));
-  }
-
-  // ---------------- CLEAR WARN ----------------
-  if (cmd === "clearwarn") {
-   if (!has(user, "admin")) return;
-
-   const t = normalizeId(m.mentionedIds[0]);
-   if (!t) return;
-
-   warnings[t] = [];
-   save(files.warnings, warnings);
-
-   return chat.sendMessage("✅ cleared");
   }
 
  } catch (e) {
@@ -296,5 +168,5 @@ client.on("message_create", async (m) => {
  }
 });
 
-// ---------------- INIT ----------------
+// ================= INIT =================
 client.initialize();
