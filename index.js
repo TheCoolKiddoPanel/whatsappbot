@@ -26,13 +26,14 @@ function saveConfig() {
  fs.writeJsonSync(configPath, config);
 }
 
-// ---------------- LOAD DATA ----------------
+// ---------------- DATA ----------------
 let roles = fs.readJsonSync(files.roles);
 let mute = fs.readJsonSync(files.mute);
 let warnings = fs.readJsonSync(files.warnings);
 
-// ---------------- OWNER ----------------
-const OWNER_NUMBER = "421910210033@c.us";
+// ---------------- OWNER (IMPORTANT FIX) ----------------
+// používame iba číslo bez @c.us / @lid
+const OWNER_NUMBER = "421910210033";
 
 // ---------------- BAD WORDS ----------------
 const badWords = [
@@ -41,30 +42,20 @@ const badWords = [
  "debil", "idiot", "asshole", "dick"
 ];
 
-// ---------------- ID FIX (IMPORTANT) ----------------
+// ---------------- NORMALIZE ID ----------------
 function normalizeId(id) {
- if (!id) return id;
- return id.split(":")[0].split("@")[0];
+ if (!id) return "";
+ return id.toString().split("@")[0].split(":")[0];
 }
-
-function isOwner(user) {
- return normalizeId(user) === normalizeId(OWNER_NUMBER);
-}
-
-// ---------------- CLIENT (MUST BE FIRST) ----------------
-const client = new Client({
- authStrategy: new LocalAuth(),
- puppeteer: {
-  headless: true,
-  executablePath: "/usr/bin/chromium",
-  args: ["--no-sandbox", "--disable-setuid-sandbox"]
- }
-});
 
 // ---------------- ROLE SYSTEM ----------------
+function isOwner(user) {
+ return normalizeId(user) === OWNER_NUMBER;
+}
+
 function role(user) {
  if (isOwner(user)) return "owner";
- return roles[user] || "user";
+ return roles[normalizeId(user)] || "user";
 }
 
 function level(r) {
@@ -82,11 +73,25 @@ function save(file, data) {
 
 // ---------------- WARN SYSTEM ----------------
 function addWarn(user, reason) {
- if (!warnings[user]) warnings[user] = [];
- warnings[user].push({ reason, time: Date.now() });
+ const id = normalizeId(user);
+
+ if (!warnings[id]) warnings[id] = [];
+ warnings[id].push({ reason, time: Date.now() });
+
  save(files.warnings, warnings);
- return warnings[user].length;
+
+ return warnings[id].length;
 }
+
+// ---------------- CLIENT ----------------
+const client = new Client({
+ authStrategy: new LocalAuth(),
+ puppeteer: {
+  headless: true,
+  executablePath: "/usr/bin/chromium",
+  args: ["--no-sandbox", "--disable-setuid-sandbox"]
+ }
+});
 
 // ---------------- START ----------------
 client.on("qr", qr => qrcode.generate(qr, { small: true }));
@@ -114,7 +119,7 @@ client.on("message_create", async (m) => {
   }
 
   // =====================================================
-  // 🚫 ANTI-VULGAR
+  // 🚫 ANTI-VULGAR SYSTEM
   // =====================================================
   const text = m.body.toLowerCase();
   const bad = badWords.some(w => text.includes(w));
@@ -197,7 +202,7 @@ client.on("message_create", async (m) => {
    const t = m.mentionedIds[0];
    if (!t) return;
 
-   roles[t] = "admin";
+   roles[normalizeId(t)] = "admin";
    save(files.roles, roles);
 
    await chat.promoteParticipants([t]);
@@ -210,7 +215,7 @@ client.on("message_create", async (m) => {
    const t = m.mentionedIds[0];
    if (!t) return;
 
-   roles[t] = "user";
+   roles[normalizeId(t)] = "user";
    save(files.roles, roles);
 
    await chat.demoteParticipants([t]);
@@ -233,7 +238,7 @@ client.on("message_create", async (m) => {
    const t = m.mentionedIds[0];
    if (!t) return;
 
-   mute[t] = Date.now() + config.muteTime;
+   mute[normalizeId(t)] = Date.now() + config.muteTime;
    save(files.mute, mute);
 
    return chat.sendMessage("🔇 muted");
@@ -246,12 +251,14 @@ client.on("message_create", async (m) => {
    const t = m.mentionedIds[0];
    const reason = args.join(" ") || "no reason";
 
-   if (!warnings[t]) warnings[t] = [];
+   const id = normalizeId(t);
 
-   warnings[t].push({ reason, time: Date.now() });
+   if (!warnings[id]) warnings[id] = [];
+
+   warnings[id].push({ reason, time: Date.now() });
    save(files.warnings, warnings);
 
-   const count = warnings[t].length;
+   const count = warnings[id].length;
 
    if (count >= 3) {
     await chat.removeParticipants([t]);
@@ -263,7 +270,7 @@ client.on("message_create", async (m) => {
 
   // ---------------- WARNS ----------------
   if (cmd === "warns") {
-   const t = m.mentionedIds[0] || user;
+   const t = normalizeId(m.mentionedIds[0] || user);
    const list = warnings[t] || [];
 
    if (!list.length) return m.reply("No warns");
@@ -271,11 +278,11 @@ client.on("message_create", async (m) => {
    return m.reply(list.map((w,i)=>`${i+1}. ${w.reason}`).join("\n"));
   }
 
-  // ---------------- CLEAR ----------------
+  // ---------------- CLEAR WARN ----------------
   if (cmd === "clearwarn") {
    if (!has(user, "admin")) return;
 
-   const t = m.mentionedIds[0];
+   const t = normalizeId(m.mentionedIds[0]);
    if (!t) return;
 
    warnings[t] = [];
