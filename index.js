@@ -11,12 +11,13 @@ const files = {
  warnings: "./data/warnings.json"
 };
 
-for (let k in files) {
- if (!fs.existsSync(files[k])) fs.writeJsonSync(files[k], {});
+for (const f in files) {
+ if (!fs.existsSync(files[f])) fs.writeJsonSync(files[f], {});
 }
 
 // ---------------- CONFIG ----------------
 const configPath = "./config.json";
+
 let config = fs.existsSync(configPath)
  ? fs.readJsonSync(configPath)
  : { prefix: "!", muteTime: 60000 };
@@ -25,7 +26,7 @@ function saveConfig() {
  fs.writeJsonSync(configPath, config);
 }
 
-// ---------------- LOAD DATA ----------------
+// ---------------- DATA LOAD ----------------
 let roles = fs.readJsonSync(files.roles);
 let mute = fs.readJsonSync(files.mute);
 let warnings = fs.readJsonSync(files.warnings);
@@ -35,19 +36,12 @@ const OWNER_NUMBER = "421910210033@c.us";
 
 // ---------------- BAD WORDS ----------------
 const badWords = [
- "fuck",
- "shit",
- "bitch",
- "kurva",
- "piča",
- "kokot",
- "debil",
- "idiot",
- "asshole",
- "dick"
+ "fuck", "shit", "bitch",
+ "kurva", "piča", "kokot",
+ "debil", "idiot", "asshole", "dick"
 ];
 
-// ---------------- CLIENT (FIXED) ----------------
+// ---------------- CLIENT (MUST BE HERE FIRST) ----------------
 const client = new Client({
  authStrategy: new LocalAuth(),
  puppeteer: {
@@ -58,17 +52,17 @@ const client = new Client({
 });
 
 // ---------------- ROLE SYSTEM ----------------
-function role(u) {
- if (u === OWNER_NUMBER) return "owner";
- return roles[u] || "user";
+function role(user) {
+ if (user === OWNER_NUMBER) return "owner";
+ return roles[user] || "user";
 }
 
-function lvl(r) {
+function level(r) {
  return { user: 0, admin: 1, owner: 2 }[r] || 0;
 }
 
-function has(u, need) {
- return lvl(role(u)) >= lvl(need);
+function has(user, need) {
+ return level(role(user)) >= level(need);
 }
 
 // ---------------- SAVE ----------------
@@ -92,17 +86,16 @@ client.on("ready", () => {
  console.log("🛠 OWNER:", OWNER_NUMBER);
 });
 
-// ---------------- MESSAGE ----------------
+// ---------------- MESSAGE HANDLER ----------------
 client.on("message_create", async (m) => {
  try {
   if (!m.body) return;
-
-  const isOwn = m.fromMe;
 
   const chat = await m.getChat();
   if (!chat.isGroup) return;
 
   const user = m.author || m.from;
+  const isOwn = m.fromMe;
 
   // ---------------- MUTE ----------------
   if (mute[user] && Date.now() < mute[user]) {
@@ -111,19 +104,17 @@ client.on("message_create", async (m) => {
   }
 
   // =====================================================
-  // 🚫 ANTI-VULGAR (BEFORE COMMANDS)
+  // 🚫 ANTI-VULGAR (RUNS BEFORE COMMANDS)
   // =====================================================
   const text = m.body.toLowerCase();
-  const hasBadWord = badWords.some(w => text.includes(w));
+  const bad = badWords.some(w => text.includes(w));
 
-  if (hasBadWord) {
-   try {
-    await m.delete(true);
-   } catch {}
+  if (bad) {
+   try { await m.delete(true); } catch {}
 
    const count = addWarn(user, "vulgarizmus");
 
-   console.log(`🚫 ANTI-VULGAR | ${user} | warn ${count}`);
+   console.log(`🚫 BAD WORD | ${user} | warn ${count}`);
 
    if (count >= 3) {
     await chat.removeParticipants([user]);
@@ -144,15 +135,22 @@ client.on("message_create", async (m) => {
   if (cmd === "help") {
    return m.reply(
 `📌 COMMANDS:
+
+👤 INFO:
 !role
-!rolecheck
-!promote
-!demote
-!kick
-!mute
-!warn
-!warns
-!clearwarn
+
+🛡 ADMIN:
+!promote @user
+!demote @user
+!kick @user
+!mute @user
+
+⚠️ WARN:
+!warn @user reason
+!warns @user
+!clearwarn @user
+
+⚙️ CONFIG:
 !config
 !setprefix
 !setmute`
@@ -173,19 +171,20 @@ client.on("message_create", async (m) => {
    if (role(user) !== "owner") return;
    config.prefix = args[0];
    saveConfig();
-   return m.reply("OK prefix");
+   return m.reply("Prefix updated: " + config.prefix);
   }
 
   if (cmd === "setmute") {
    if (role(user) !== "owner") return;
    config.muteTime = Number(args[0]);
    saveConfig();
-   return m.reply("OK mute");
+   return m.reply("Mute updated: " + config.muteTime);
   }
 
   // ---------------- PROMOTE ----------------
   if (cmd === "promote") {
    if (!has(user, "admin")) return;
+
    const t = m.mentionedIds[0];
    if (!t) return;
 
@@ -199,6 +198,7 @@ client.on("message_create", async (m) => {
   // ---------------- DEMOTE ----------------
   if (cmd === "demote") {
    if (!has(user, "admin")) return;
+
    const t = m.mentionedIds[0];
    if (!t) return;
 
@@ -212,6 +212,7 @@ client.on("message_create", async (m) => {
   // ---------------- KICK ----------------
   if (cmd === "kick") {
    if (!has(user, "admin")) return;
+
    const t = m.mentionedIds[0];
    if (!t) return;
 
@@ -222,6 +223,7 @@ client.on("message_create", async (m) => {
   // ---------------- MUTE ----------------
   if (cmd === "mute") {
    if (!has(user, "admin")) return;
+
    const t = m.mentionedIds[0];
    if (!t) return;
 
@@ -253,16 +255,19 @@ client.on("message_create", async (m) => {
    return chat.sendMessage(`⚠️ Warn (${count}/3)`);
   }
 
-  // ---------------- WARNS ----------------
+  // ---------------- WARNS LIST ----------------
   if (cmd === "warns") {
    const t = m.mentionedIds[0] || user;
    const list = warnings[t] || [];
+
    if (!list.length) return m.reply("No warns");
 
-   return m.reply(list.map((w,i)=>`${i+1}. ${w.reason}`).join("\n"));
+   return m.reply(
+    list.map((w,i)=>`${i+1}. ${w.reason}`).join("\n")
+   );
   }
 
-  // ---------------- CLEAR ----------------
+  // ---------------- CLEAR WARNS ----------------
   if (cmd === "clearwarn") {
    if (!has(user, "admin")) return;
 
@@ -272,7 +277,7 @@ client.on("message_create", async (m) => {
    warnings[t] = [];
    save(files.warnings, warnings);
 
-   return chat.sendMessage("✅ cleared");
+   return chat.sendMessage("✅ warns cleared");
   }
 
  } catch (e) {
