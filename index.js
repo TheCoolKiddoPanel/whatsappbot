@@ -30,18 +30,26 @@ let roles = fs.readJsonSync(files.roles);
 let mute = fs.readJsonSync(files.mute);
 let warnings = fs.readJsonSync(files.warnings);
 
-// ---------------- CLIENT ----------------
-const client = new Client({
- authStrategy: new LocalAuth(),
- puppeteer: {
-  headless: true,
-  executablePath: "/usr/bin/chromium",
-  args: ["--no-sandbox", "--disable-setuid-sandbox"]
- }
-});
+// ---------------- OWNER ----------------
+const OWNER_NUMBER = "421910210033@c.us";
+
+// ---------------- BAD WORDS ----------------
+const badWords = [
+ "fuck",
+ "shit",
+ "bitch",
+ "kurva",
+ "piča",
+ "kokot",
+ "debil",
+ "idiot",
+ "asshole",
+ "dick"
+];
 
 // ---------------- ROLE SYSTEM ----------------
 function role(u) {
+ if (u === OWNER_NUMBER) return "owner";
  return roles[u] || "user";
 }
 
@@ -53,6 +61,7 @@ function has(u, need) {
  return lvl(role(u)) >= lvl(need);
 }
 
+// ---------------- SAVE ----------------
 function save(file, data) {
  fs.writeJsonSync(file, data);
 }
@@ -70,13 +79,7 @@ client.on("qr", qr => qrcode.generate(qr, { small: true }));
 
 client.on("ready", () => {
  console.log("🤖 BOT ONLINE");
-
- const botId = client.info.wid._serialized;
-
- roles[botId] = "owner";
- save(files.roles, roles);
-
- console.log("🛠 BOT OWNER:", botId);
+ console.log("🛠 OWNER:", OWNER_NUMBER);
 });
 
 // ---------------- MESSAGE ----------------
@@ -91,65 +94,56 @@ client.on("message_create", async (m) => {
 
   const user = m.author || m.from;
 
+  // ---------------- MUTE ----------------
   if (mute[user] && Date.now() < mute[user]) {
    if (!isOwn) await m.delete(true);
    return;
   }
 
+  // =====================================================
+  // 🚫 ANTI-VULGAR (BEFORE COMMANDS)
+  // =====================================================
+  const text = m.body.toLowerCase();
+  const hasBadWord = badWords.some(w => text.includes(w));
+
+  if (hasBadWord) {
+   try {
+    await m.delete(true);
+   } catch {}
+
+   const count = addWarn(user, "vulgarizmus");
+
+   console.log(`🚫 ANTI-SWEAR | ${user} | warn ${count}`);
+
+   if (count >= 3) {
+    await chat.removeParticipants([user]);
+    console.log(`🚫 AUTO-KICK | ${user} (3 warns)`);
+    return chat.sendMessage("🚫 Kicked (vulgarizmus)");
+   }
+
+   return chat.sendMessage("⚠️ Vulgarizmus nie je povolený!");
+  }
+
+  // ---------------- PREFIX ----------------
   if (!m.body.startsWith(config.prefix)) return;
 
   const args = m.body.slice(config.prefix.length).trim().split(" ");
   const cmd = args.shift().toLowerCase();
 
-  // ---------------- HELP COMMAND ----------------
+  // ---------------- HELP ----------------
   if (cmd === "help") {
    return m.reply(
-`📌 BOT COMMANDS
-
-👤 INFO:
-${config.prefix}role
-${config.prefix}rolecheck
-${config.prefix}testself
-
-🛡 ADMIN:
-${config.prefix}promote @user
-${config.prefix}demote @user
-${config.prefix}kick @user
-${config.prefix}mute @user
-
-⚠️ WARN:
-${config.prefix}warn @user reason
-${config.prefix}warns @user
-${config.prefix}clearwarn @user
-
-⚙️ CONFIG:
-${config.prefix}config
-${config.prefix}setprefix !
-${config.prefix}setmute 60000`
+`📌 COMMANDS:
+!role
+!promote
+!demote
+!kick
+!mute
+!warn
+!warns
+!clearwarn
+!config`
    );
-  }
-
-  // ---------------- CONFIG ----------------
-  if (cmd === "config") {
-   return m.reply(
-`⚙️ CONFIG
-Prefix: ${config.prefix}
-Mute: ${config.muteTime}`
-   );
-  }
-
-  if (cmd === "setprefix") {
-   if (role(user) !== "owner") return;
-   config.prefix = args[0];
-   saveConfig();
-   return m.reply("✅ Prefix: " + config.prefix);
-  }
-
-  if (cmd === "setmute") {
-   if (role(user) !== "owner") return;
-   config.muteTime = Number(args[0]);
-   saveConfig();
-   return m.reply("✅ Mute: " + config.muteTime);
   }
 
   // ---------------- ROLE ----------------
@@ -157,9 +151,23 @@ Mute: ${config.muteTime}`
    return m.reply("Role: " + role(user));
   }
 
-  // ---------------- TEST ----------------
-  if (cmd === "testself") {
-   return m.reply(isOwn ? "Own message OK" : "Not own");
+  // ---------------- CONFIG ----------------
+  if (cmd === "config") {
+   return m.reply(`Prefix: ${config.prefix}\nMute: ${config.muteTime}`);
+  }
+
+  if (cmd === "setprefix") {
+   if (role(user) !== "owner") return;
+   config.prefix = args[0];
+   saveConfig();
+   return m.reply("OK prefix");
+  }
+
+  if (cmd === "setmute") {
+   if (role(user) !== "owner") return;
+   config.muteTime = Number(args[0]);
+   saveConfig();
+   return m.reply("OK mute");
   }
 
   // ---------------- PROMOTE ----------------
@@ -167,8 +175,10 @@ Mute: ${config.muteTime}`
    if (!has(user, "admin")) return;
    const t = m.mentionedIds[0];
    if (!t) return;
+
    roles[t] = "admin";
    save(files.roles, roles);
+
    await chat.promoteParticipants([t]);
    return chat.sendMessage("⬆️ promoted");
   }
@@ -178,8 +188,10 @@ Mute: ${config.muteTime}`
    if (!has(user, "admin")) return;
    const t = m.mentionedIds[0];
    if (!t) return;
+
    roles[t] = "user";
    save(files.roles, roles);
+
    await chat.demoteParticipants([t]);
    return chat.sendMessage("⬇️ demoted");
   }
@@ -189,6 +201,7 @@ Mute: ${config.muteTime}`
    if (!has(user, "admin")) return;
    const t = m.mentionedIds[0];
    if (!t) return;
+
    await chat.removeParticipants([t]);
    return chat.sendMessage("👢 kicked");
   }
@@ -198,14 +211,17 @@ Mute: ${config.muteTime}`
    if (!has(user, "admin")) return;
    const t = m.mentionedIds[0];
    if (!t) return;
+
    mute[t] = Date.now() + config.muteTime;
    save(files.mute, mute);
+
    return chat.sendMessage("🔇 muted");
   }
 
   // ---------------- WARN ----------------
   if (cmd === "warn") {
    if (!has(user, "admin")) return;
+
    const t = m.mentionedIds[0];
    const reason = args.join(" ") || "no reason";
 
@@ -224,7 +240,7 @@ Mute: ${config.muteTime}`
    return chat.sendMessage(`⚠️ Warn (${count}/3)`);
   }
 
-  // ---------------- WARNS LIST ----------------
+  // ---------------- WARNS ----------------
   if (cmd === "warns") {
    const t = m.mentionedIds[0] || user;
    const list = warnings[t] || [];
@@ -233,14 +249,17 @@ Mute: ${config.muteTime}`
    return m.reply(list.map((w,i)=>`${i+1}. ${w.reason}`).join("\n"));
   }
 
-  // ---------------- CLEAR WARNS ----------------
+  // ---------------- CLEAR ----------------
   if (cmd === "clearwarn") {
    if (!has(user, "admin")) return;
+
    const t = m.mentionedIds[0];
    if (!t) return;
+
    warnings[t] = [];
    save(files.warnings, warnings);
-   return chat.sendMessage("✅ cleared warns");
+
+   return chat.sendMessage("✅ cleared");
   }
 
  } catch (e) {
